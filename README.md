@@ -28,8 +28,39 @@ The implementation will be developed incrementally, with the matching logic kept
 ## Current Status
 
 - Basic order structure implemented
-- Limit order book implemented
+- Limit order book structure implemented
+- Order book organized by price levels using SortedDictionary<decimal, Queue<Order>>
 - Buy orders sorted by highest price first
 - Sell orders sorted by lowest price first
-- Simple CLI for inserting and visualizing orders
-- Initial automated tests for order book behavior
+- Price-time priority preserved through serialized order processing
+- Thread-safe order ingress implemented
+- Concurrent orders are serialized before entering the matching engine
+- FIFO incoming order queue with a single consumer
+- Automated tests for price priority and concurrent order sequencing
+- Concurrent order submission demo through the CLI
+
+
+### Order Processing Flow
+
+Orders can be submitted concurrently from multiple threads.
+Each order receives a sequence number when it is officially accepted by the engine. Orders are then placed in a FIFO queue and processed by a single worker, ensuring deterministic processing order before interacting with the order book.
+
+```text
+Multiple Producers
+        |
+        v
+   Order Ingress
+        |
+     Sequence
+        |
+        v
+   Incoming Queue
+        |
+        v
+ Single Consumer
+        |
+        v
+    Order Book
+```
+
+Matching logic is the next major implementation step.

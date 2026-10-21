@@ -21,52 +21,41 @@ namespace MatchingEngine
 
     public class OrderBook
     {
-        private readonly List<Order> _bids = new();
-        private readonly List<Order> _asks = new();
+        private readonly SortedDictionary<decimal, Queue<Order>> _bids =
+            new(Comparer<decimal>.Create((a, b) => b.CompareTo(a))); // Highest price first
+        private readonly SortedDictionary<decimal, Queue<Order>> _asks = new();
 
-        private long _lastSequence = 0;
+        public IEnumerable<Order> Bids =>
+            _bids.SelectMany(level => level.Value);
 
-        public IReadOnlyList<Order> Bids => _bids;
-        public IReadOnlyList<Order> Asks => _asks;
+        public IEnumerable<Order> Asks =>
+            _asks.SelectMany(level => level.Value);
 
         public void AddOrder(Order order)
         {
-            if (order.Type != OrderType.LMT) // MOMENTANEO
-                throw new ArgumentException("Only LMT orders can stay in the book.");
+            if (order.Type != OrderType.LMT) 
+                throw new ArgumentException(
+                    "Only LMT orders can stay in the book.");
 
             if (order.Price == null)
-                throw new ArgumentException("LMT order must have a price.");
+                throw new ArgumentException(
+                    "LMT order must have a price.");
 
-            order.Sequence = ++_lastSequence;
+            var bookSide =
+                order.Side == Side.Buy
+                ? _bids
+                : _asks;
 
-            if (order.Side == Side.Buy)
-                InsertBid(order);
-            else
-                InsertAsk(order);
-        }
+            decimal price = order.Price.Value;
 
-        private void InsertBid(Order order)
-        {
-            int index = _bids.FindIndex(
-                existing => existing.Price < order.Price // Garante seq maior preço -> menor preço para o bid
-            );
+            if (!bookSide.TryGetValue(price, out Queue<Order>? level))
+            {
+                level = new Queue<Order>();
 
-            if (index == -1)
-                _bids.Add(order);
-            else
-                _bids.Insert(index, order);
-        }
+                bookSide.Add(price, level);
+            }
 
-        private void InsertAsk(Order order)
-        {
-            int index = _asks.FindIndex(
-                existing => existing.Price > order.Price // Garante seq menor preço -> maior preço para o ask
-            );
-
-            if (index == -1)
-                _asks.Add(order);
-            else
-                _asks.Insert(index, order);
+            level.Enqueue(order);
         }
     }
 

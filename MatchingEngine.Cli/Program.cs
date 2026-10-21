@@ -1,102 +1,59 @@
 ﻿using MatchingEngine;
 
 var book = new OrderBook();
-long nextId = 1;
+var engine = new MatchingEngine.MatchingEngine(book);
 
-while (true)
+const int numberOfOrders = 10;
+
+using var barrier = new Barrier(numberOfOrders + 1);
+
+var tasks = new List<Task>();
+
+for (int i = 1; i <= numberOfOrders; i++)
 {
-    PrintBook(book);
+    long id = i;
 
-    Console.WriteLine();
-    Console.Write("Nova ordem (BUY/SELL PRECO QUANTIDADE) ou EXIT: ");
-
-    string? input = Console.ReadLine();
-
-    if (string.IsNullOrWhiteSpace(input))
-        continue;
-
-    if (input.Equals("EXIT", StringComparison.OrdinalIgnoreCase))
-        break;
-
-    string[] parts = input.Split(' ');
-
-    if (parts.Length != 3)
+    tasks.Add(Task.Run(() =>
     {
-        Console.WriteLine("Formato inválido.");
-        Console.ReadKey();
-        continue;
-    }
+        var order = new Order
+        {
+            Id = id,
+            Side = Side.Buy,
+            Type = OrderType.LMT,
+            Price = 100m,
+            Quantity = 10
+        };
 
-    Side side;
+        Console.WriteLine(
+            $"Order {id} pronta | Thread {Environment.CurrentManagedThreadId}"
+        );
 
-    if (parts[0].Equals("BUY", StringComparison.OrdinalIgnoreCase))
-        side = Side.Buy;
-    else if (parts[0].Equals("SELL", StringComparison.OrdinalIgnoreCase))
-        side = Side.Sell;
-    else
-    {
-        Console.WriteLine("Side inválido.");
-        Console.ReadKey();
-        continue;
-    }
+        barrier.SignalAndWait(); // Garante que todas as threads enviem as ordens ao mesmo tempo
 
-    if (!decimal.TryParse(parts[1], out decimal price))
-    {
-        Console.WriteLine("Preço inválido.");
-        Console.ReadKey();
-        continue;
-    }
-
-    if (!int.TryParse(parts[2], out int quantity))
-    {
-        Console.WriteLine("Quantidade inválida.");
-        Console.ReadKey();
-        continue;
-    }
-
-    var order = new Order
-    {
-        Id = nextId++,
-        Side = side,
-        Type = OrderType.LMT,
-        Price = price,
-        Quantity = quantity
-    };
-
-    book.AddOrder(order);
-
-    Console.Clear();
+        engine.SubmitOrder(order);
+    }));
 }
 
-static void PrintBook(OrderBook book)
+Console.WriteLine();
+Console.WriteLine("Esperando todas as threads ficarem prontas...");
+
+barrier.SignalAndWait();
+
+Console.WriteLine("GO!");
+Console.WriteLine();
+
+await Task.WhenAll(tasks);
+
+await engine.StopAsync();
+
+Console.WriteLine();
+Console.WriteLine("========= RESULTADO =========");
+
+foreach (Order order in book.Bids)
 {
-    Console.WriteLine("========== ORDER BOOK ==========");
-    Console.WriteLine();
-
-    Console.WriteLine("ASKS");
-    Console.WriteLine("-------------------------------");
-
-    foreach (Order order in book.Asks)
-    {
-        Console.WriteLine(
-            $"{order.Id,3} | {order.Price,8} | {order.Quantity,8}"
-        );
-    }
-
-    Console.WriteLine();
-    Console.WriteLine("-------------------------------");
-    Console.WriteLine();
-
-    Console.WriteLine("BIDS");
-    Console.WriteLine("-------------------------------");
-
-    foreach (Order order in book.Bids)
-    {
-        Console.WriteLine(
-            $"{order.Id,3} | {order.Price,8} | {order.Quantity,8}"
-        );
-    }
-
-    Console.WriteLine();
-    Console.WriteLine("===============================");
+    Console.WriteLine(
+        $"ID: {order.Id,2} | " +
+        $"SEQ: {order.Sequence,2} | " +
+        $"PRICE: {order.Price}"
+    );
 }
