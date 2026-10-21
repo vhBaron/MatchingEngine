@@ -27,4 +27,9 @@ The implementation will be developed incrementally, with the matching logic kept
 
 ## Current Status
 
-Initial project structure created.
+- Basic order structure implemented
+- Limit order book implemented
+- Buy orders sorted by highest price first
+- Sell orders sorted by lowest price first
+- Simple CLI for inserting and visualizing orders
+- Initial automated tests for order book behavior
