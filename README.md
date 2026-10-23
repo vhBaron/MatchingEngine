@@ -28,22 +28,28 @@ The implementation will be developed incrementally, with the matching logic kept
 ## Current Status
 
 - Basic order structure implemented
-- Limit order book structure implemented
-- Order book organized by price levels using SortedDictionary<decimal, Queue<Order>>
-- Buy orders sorted by highest price first
-- Sell orders sorted by lowest price first
-- Price-time priority preserved through serialized order processing
-- Thread-safe order ingress implemented
-- Concurrent orders are serialized before entering the matching engine
-- FIFO incoming order queue with a single consumer
-- Automated tests for price priority and concurrent order sequencing
-- Concurrent order submission demo through the CLI
-
+- Limit order book organized by price levels using `SortedDictionary<decimal, Queue<Order>>`
+- Buy orders prioritized by highest price
+- Sell orders prioritized by lowest price
+- FIFO priority preserved within each price level
+- Thread-safe order ingress with serialized processing
+- Concurrent orders assigned an execution sequence before processing
+- Limit order matching
+- Market order matching
+- Partial fills
+- Multi-level order execution
+- Best Bid / Best Ask retrieval
+- Trade generation
+- Filled orders automatically removed from the order book
+- Unfilled Limit Orders remain in the book
+- Unfilled Market Orders are discarded
+- Automated tests covering order book priority, Limit Orders and Market Orders
 
 ### Order Processing Flow
 
 Orders can be submitted concurrently from multiple threads.
-Each order receives a sequence number when it is officially accepted by the engine. Orders are then placed in a FIFO queue and processed by a single worker, ensuring deterministic processing order before interacting with the order book.
+
+Each order receives a sequence number when it is accepted by the engine and is processed by a single consumer. The matching engine then attempts to execute the incoming order against the best available prices in the opposite side of the book.
 
 ```text
 Multiple Producers
@@ -51,6 +57,7 @@ Multiple Producers
         v
    Order Ingress
         |
+        v
      Sequence
         |
         v
@@ -60,7 +67,27 @@ Multiple Producers
  Single Consumer
         |
         v
+  Matching Engine
+      /      \
+     v        v
+ Best Bid   Best Ask
+      \      /
+       v    v
+       Trades
+         |
+         v
     Order Book
 ```
 
-Matching logic is the next major implementation step.
+Limit Orders may remain in the order book when they cannot be fully executed at their specified price or better.
+
+Market Orders consume the best available prices until fully executed or until the opposite side of the book has no remaining liquidity.
+
+## Next Steps
+
+- Order cancellation
+- Order modification
+- Order status tracking
+- Pegged orders
+- Improve CLI visualization
+- Additional matching and concurrency tests
