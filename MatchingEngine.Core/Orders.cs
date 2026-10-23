@@ -57,6 +57,50 @@ namespace MatchingEngine
 
             level.Enqueue(order);
         }
+
+        public Order? GetBestBid()
+        {
+            if (_bids.Count == 0)
+                return null;
+
+            return _bids.First().Value.Peek();
+        }
+
+        public Order? GetBestAsk()
+        {
+            if (_asks.Count == 0)
+                return null;
+
+            return _asks.First().Value.Peek();
+        }
+
+        public void RemoveOrder(Order order)
+        {
+            if (order.Price == null)
+                throw new ArgumentException("Order must have a price.");
+
+            var bookSide =
+                order.Side == Side.Buy
+                ? _bids
+                : _asks;
+
+            decimal price = order.Price.Value;
+
+            if (!bookSide.TryGetValue(price, out Queue<Order>? level))
+                return;
+
+            if (level.Count == 0)
+                return;
+
+            if (level.Peek().Id != order.Id)
+                throw new InvalidOperationException(
+                    "Only the first order of a price level can be removed during matching.");
+
+            level.Dequeue();
+
+            if (level.Count == 0)
+                bookSide.Remove(price);
+        }
     }
 
 }
