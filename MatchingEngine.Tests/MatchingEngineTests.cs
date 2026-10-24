@@ -1,251 +1,403 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using MatchingEngine;
 using Xunit;
 
-namespace MatchingEngine.Tests;
-
-public class MatchingEngineTest
+namespace MatchingEngine.Tests
 {
-    [Fact]
-    public async Task Concurrent_Orders_Should_Be_Processed_By_Sequence()
+    public class OrderProcessingTests
     {
-        var book = new OrderBook();
-        var engine = new MatchingEngine(book);
-
-        const int numberOfOrders = 10;
-
-        using var barrier = new Barrier(numberOfOrders + 1);
-
-        var tasks = new List<Task>();
-
-        for (int i = 1; i <= numberOfOrders; i++)
+        [Fact]
+        public async Task SubmitOrder_LimitWithoutMatch_RestsInBook()
         {
-            long id = i;
+            var book = new OrderBook();
+            var engine = new MatchingEngine(book);
 
-            tasks.Add(Task.Run(() =>
+            var trades = new List<Trade>();
+
+            engine.OrderProcessed += (_, orderTrades) =>
+                trades.AddRange(orderTrades);
+
+            var order = CreateLimitOrder(
+                id: 1,
+                side: Side.Buy,
+                price: 100m,
+                quantity: 10
+            );
+
+            engine.SubmitOrder(NewOrderMessage(order));
+
+            await engine.StopAsync();
+
+            var restingOrder = Assert.Single(book.Bids);
+
+            Assert.Equal(order.Id, restingOrder.Id);
+            Assert.Equal(100m, restingOrder.Price);
+            Assert.Equal(10, restingOrder.Quantity);
+
+            Assert.Empty(book.Asks);
+            Assert.Empty(trades);
+        }
+
+
+        [Fact]
+        public async Task SubmitOrder_CrossingLimitOrders_ExecuteCompletely()
+        {
+            var book = new OrderBook();
+            var engine = new global::MatchingEngine.MatchingEngine(book);
+
+            var trades = new List<Trade>();
+
+            engine.OrderProcessed += (_, orderTrades) =>
+                trades.AddRange(orderTrades);
+
+            var sell = CreateLimitOrder(
+                id: 1,
+                side: Side.Sell,
+                price: 101m,
+                quantity: 10
+            );
+
+            var buy = CreateLimitOrder(
+                id: 2,
+                side: Side.Buy,
+                price: 101m,
+                quantity: 10
+            );
+
+            engine.SubmitOrder(NewOrderMessage(sell));
+            engine.SubmitOrder(NewOrderMessage(buy));
+
+            await engine.StopAsync();
+
+            var trade = Assert.Single(trades);
+
+            Assert.Equal(2, trade.BuyOrderId);
+            Assert.Equal(1, trade.SellOrderId);
+            Assert.Equal(101m, trade.Price);
+            Assert.Equal(10, trade.Quantity);
+
+            Assert.Empty(book.Bids);
+            Assert.Empty(book.Asks);
+        }
+
+
+        [Fact]
+        public async Task SubmitOrder_NonCrossingLimitOrders_RemainInBook()
+        {
+            var book = new OrderBook();
+            var engine = new MatchingEngine(book);
+
+            var trades = new List<Trade>();
+
+            engine.OrderProcessed += (_, orderTrades) =>
+                trades.AddRange(orderTrades);
+
+            var sell = CreateLimitOrder(
+                id: 1,
+                side: Side.Sell,
+                price: 101m,
+                quantity: 10
+            );
+
+            var buy = CreateLimitOrder(
+                id: 2,
+                side: Side.Buy,
+                price: 100m,
+                quantity: 10
+            );
+
+            engine.SubmitOrder(NewOrderMessage(sell));
+            engine.SubmitOrder(NewOrderMessage(buy));
+
+            await engine.StopAsync();
+
+            var restingBid = Assert.Single(book.Bids);
+            var restingAsk = Assert.Single(book.Asks);
+
+            Assert.Equal(2, restingBid.Id);
+            Assert.Equal(100m, restingBid.Price);
+
+            Assert.Equal(1, restingAsk.Id);
+            Assert.Equal(101m, restingAsk.Price);
+
+            Assert.Empty(trades);
+        }
+
+
+        [Fact]
+        public async Task SubmitOrder_PartiallyFilledLimitOrder_RestsRemainingQuantity()
+        {
+            var book = new OrderBook();
+            var engine = new MatchingEngine(book);
+
+            var trades = new List<Trade>();
+
+            engine.OrderProcessed += (_, orderTrades) =>
+                trades.AddRange(orderTrades);
+
+            var sell = CreateLimitOrder(
+                id: 1,
+                side: Side.Sell,
+                price: 101m,
+                quantity: 5
+            );
+
+            var buy = CreateLimitOrder(
+                id: 2,
+                side: Side.Buy,
+                price: 101m,
+                quantity: 10
+            );
+
+            engine.SubmitOrder(NewOrderMessage(sell));
+            engine.SubmitOrder(NewOrderMessage(buy));
+
+            await engine.StopAsync();
+
+            var trade = Assert.Single(trades);
+            var remainingBuy = Assert.Single(book.Bids);
+
+            Assert.Equal(5, trade.Quantity);
+            Assert.Equal(101m, trade.Price);
+
+            Assert.Equal(2, remainingBuy.Id);
+            Assert.Equal(5, remainingBuy.Quantity);
+
+            Assert.Empty(book.Asks);
+        }
+
+
+        [Fact]
+        public async Task SubmitOrder_PartiallyFilledMarketOrder_DoesNotRestInBook()
+        {
+            var book = new OrderBook();
+            var engine = new MatchingEngine(book);
+
+            var trades = new List<Trade>();
+
+            engine.OrderProcessed += (_, orderTrades) =>
+                trades.AddRange(orderTrades);
+
+            var sell = CreateLimitOrder(
+                id: 1,
+                side: Side.Sell,
+                price: 101m,
+                quantity: 5
+            );
+
+            var marketBuy = CreateMarketOrder(
+                id: 2,
+                side: Side.Buy,
+                quantity: 10
+            );
+
+            engine.SubmitOrder(NewOrderMessage(sell));
+            engine.SubmitOrder(NewOrderMessage(marketBuy));
+
+            await engine.StopAsync();
+
+            var trade = Assert.Single(trades);
+
+            Assert.Equal(5, trade.Quantity);
+            Assert.Equal(101m, trade.Price);
+
+            // O restante da MKT não pode ficar resting no book.
+            Assert.Equal(5, marketBuy.Quantity);
+            Assert.Empty(book.Bids);
+            Assert.Empty(book.Asks);
+        }
+
+
+        [Fact]
+        public async Task SubmitOrder_MarketOrder_MatchesAcrossMultiplePriceLevels()
+        {
+            var book = new OrderBook();
+            var engine = new MatchingEngine(book);
+
+            var trades = new List<Trade>();
+
+            engine.OrderProcessed += (_, orderTrades) =>
+                trades.AddRange(orderTrades);
+
+            var firstAsk = CreateLimitOrder(
+                id: 1,
+                side: Side.Sell,
+                price: 101m,
+                quantity: 5
+            );
+
+            var secondAsk = CreateLimitOrder(
+                id: 2,
+                side: Side.Sell,
+                price: 102m,
+                quantity: 7
+            );
+
+            var marketBuy = CreateMarketOrder(
+                id: 3,
+                side: Side.Buy,
+                quantity: 10
+            );
+
+            engine.SubmitOrder(NewOrderMessage(firstAsk));
+            engine.SubmitOrder(NewOrderMessage(secondAsk));
+            engine.SubmitOrder(NewOrderMessage(marketBuy));
+
+            await engine.StopAsync();
+
+            Assert.Equal(2, trades.Count);
+
+            Assert.Equal(1, trades[0].SellOrderId);
+            Assert.Equal(101m, trades[0].Price);
+            Assert.Equal(5, trades[0].Quantity);
+
+            Assert.Equal(2, trades[1].SellOrderId);
+            Assert.Equal(102m, trades[1].Price);
+            Assert.Equal(5, trades[1].Quantity);
+
+            var remainingAsk = Assert.Single(book.Asks);
+
+            Assert.Equal(2, remainingAsk.Id);
+            Assert.Equal(2, remainingAsk.Quantity);
+
+            Assert.Empty(book.Bids);
+        }
+
+
+        [Fact]
+        public async Task SubmitOrder_SamePrice_UsesTimePriority()
+        {
+            var book = new OrderBook();
+            var engine = new MatchingEngine(book);
+
+            var trades = new List<Trade>();
+
+            engine.OrderProcessed += (_, orderTrades) =>
+                trades.AddRange(orderTrades);
+
+            var firstAsk = CreateLimitOrder(
+                id: 1,
+                side: Side.Sell,
+                price: 101m,
+                quantity: 5
+            );
+
+            var secondAsk = CreateLimitOrder(
+                id: 2,
+                side: Side.Sell,
+                price: 101m,
+                quantity: 5
+            );
+
+            var marketBuy = CreateMarketOrder(
+                id: 3,
+                side: Side.Buy,
+                quantity: 5
+            );
+
+            // Como as mensagens são enviadas sequencialmente neste teste,
+            // a ordem 1 deve chegar ao nível de preço antes da ordem 2.
+            engine.SubmitOrder(NewOrderMessage(firstAsk));
+            engine.SubmitOrder(NewOrderMessage(secondAsk));
+            engine.SubmitOrder(NewOrderMessage(marketBuy));
+
+            await engine.StopAsync();
+
+            var trade = Assert.Single(trades);
+
+            Assert.Equal(1, trade.SellOrderId);
+            Assert.Equal(101m, trade.Price);
+            Assert.Equal(5, trade.Quantity);
+
+            var remainingAsk = Assert.Single(book.Asks);
+
+            Assert.Equal(2, remainingAsk.Id);
+            Assert.Equal(5, remainingAsk.Quantity);
+        }
+
+
+        [Fact]
+        public async Task SubmitOrder_SellOrder_MatchesBestBid()
+        {
+            var book = new OrderBook();
+            var engine = new MatchingEngine(book);
+
+            var trades = new List<Trade>();
+
+            engine.OrderProcessed += (_, orderTrades) =>
+                trades.AddRange(orderTrades);
+
+            var buy = CreateLimitOrder(
+                id: 1,
+                side: Side.Buy,
+                price: 100m,
+                quantity: 10
+            );
+
+            var sell = CreateLimitOrder(
+                id: 2,
+                side: Side.Sell,
+                price: 100m,
+                quantity: 10
+            );
+
+            engine.SubmitOrder(NewOrderMessage(buy));
+            engine.SubmitOrder(NewOrderMessage(sell));
+
+            await engine.StopAsync();
+
+            var trade = Assert.Single(trades);
+
+            Assert.Equal(1, trade.BuyOrderId);
+            Assert.Equal(2, trade.SellOrderId);
+            Assert.Equal(100m, trade.Price);
+            Assert.Equal(10, trade.Quantity);
+
+            Assert.Empty(book.Bids);
+            Assert.Empty(book.Asks);
+        }
+
+
+        private static EngineMessage NewOrderMessage(Order order) =>
+            new()
             {
-                var order = new Order
-                {
-                    Id = id,
-                    Side = Side.Buy,
-                    Type = OrderType.LMT,
-                    Price = 100m,
-                    Quantity = 10
-                };
-
-                barrier.SignalAndWait();
-
-                engine.SubmitOrder(order);
-            }));
-        }
-
-        barrier.SignalAndWait();
-
-        await Task.WhenAll(tasks);
-
-        await engine.StopAsync();
-
-        var bids = book.Bids.ToArray();
-
-        Assert.Equal(numberOfOrders, bids.Length);
-
-        for (int i = 0; i < numberOfOrders; i++)
-        {
-            Assert.Equal((long)(i + 1), bids[i].Sequence);
-        }
-    }
+                Type = MessageType.NewOrder,
+                Order = order
+            };
 
 
-    [Fact]
-    public async Task BuyLimitOrder_ShouldMatchBestAsks_InPricePriority()
-    {
-        // Arrange
-        var book = new OrderBook();
-        var engine = new MatchingEngine(book);
-
-        book.AddOrder(new Order
-        {
-            Id = 1,
-            Side = Side.Buy,
-            Type = OrderType.LMT,
-            Price = 99,
-            Quantity = 10
-        });
-
-        book.AddOrder(new Order
-        {
-            Id = 2,
-            Side = Side.Buy,
-            Type = OrderType.LMT,
-            Price = 98,
-            Quantity = 20
-        });
-
-        book.AddOrder(new Order
-        {
-            Id = 3,
-            Side = Side.Sell,
-            Type = OrderType.LMT,
-            Price = 101,
-            Quantity = 10
-        });
-
-        book.AddOrder(new Order
-        {
-            Id = 4,
-            Side = Side.Sell,
-            Type = OrderType.LMT,
-            Price = 102,
-            Quantity = 20
-        });
-
-        book.AddOrder(new Order
-        {
-            Id = 5,
-            Side = Side.Sell,
-            Type = OrderType.LMT,
-            Price = 103,
-            Quantity = 30
-        });
+        private static Order CreateLimitOrder(
+            long id,
+            Side side,
+            decimal price,
+            int quantity,
+            string ownerId = "TestUser") =>
+            new()
+            {
+                Id = id,
+                OwnerID = ownerId,
+                Side = side,
+                Type = OrderType.LMT,
+                Price = price,
+                Quantity = quantity
+            };
 
 
-        var incomingOrder = new Order
-        {
-            Id = 6,
-            Side = Side.Buy,
-            Type = OrderType.LMT,
-            Price = 102,
-            Quantity = 25
-        };
-
-
-        // Act
-        List<Trade> trades = engine.ProcessOrder(incomingOrder);
-
-
-        // Assert - Trades
-        Assert.Equal(2, trades.Count);
-
-        // Primeiro deve consumir o ASK de 101
-        Assert.Equal(3, trades[0].SellOrderId);
-        Assert.Equal(10, trades[0].Quantity);
-        Assert.Equal(101m, trades[0].Price);
-
-        // Depois consome parcialmente o ASK de 102
-        Assert.Equal(4, trades[1].SellOrderId);
-        Assert.Equal(15, trades[1].Quantity);
-        Assert.Equal(102m, trades[1].Price);
-
-
-        // Incoming foi completamente executada
-        Assert.Equal(0, incomingOrder.Quantity);
-
-
-        // ASK de 101 deve ter desaparecido
-        Assert.DoesNotContain(
-            book.Asks,
-            order => order.Id == 3
-        );
-
-        // ASK de 102 deve continuar com 5
-        Order remainingAsk = Assert.Single(
-            book.Asks.Where(order => order.Id == 4)
-        );
-
-        Assert.Equal(5, remainingAsk.Quantity);
-        Assert.Equal(102m, remainingAsk.Price);
-
-
-        // ASK de 103 não deve ter sido tocado
-        Order untouchedAsk = Assert.Single(
-            book.Asks.Where(order => order.Id == 5)
-        );
-
-        Assert.Equal(30, untouchedAsk.Quantity);
-
-
-        // Bids antigos não devem ter sido alterados
-        Assert.Equal(2, book.Bids.Count());
-
-        Assert.Contains(book.Bids, order =>
-            order.Id == 1 &&
-            order.Quantity == 10 &&
-            order.Price == 99);
-
-        Assert.Contains(book.Bids, order =>
-            order.Id == 2 &&
-            order.Quantity == 20 &&
-            order.Price == 98);
-
-
-        await engine.StopAsync();
-        }
-
-
-    [Fact]
-    public async Task BuyMarketOrder_ShouldConsumeBestAsks_UntilFilled()
-    {
-        // Arrange
-        var book = new OrderBook();
-        var engine = new MatchingEngine(book);
-
-        book.AddOrder(new Order
-        {
-            Id = 1,
-            Side = Side.Sell,
-            Type = OrderType.LMT,
-            Price = 101,
-            Quantity = 10
-        });
-
-        book.AddOrder(new Order
-        {
-            Id = 2,
-            Side = Side.Sell,
-            Type = OrderType.LMT,
-            Price = 102,
-            Quantity = 20
-        });
-
-        book.AddOrder(new Order
-        {
-            Id = 3,
-            Side = Side.Sell,
-            Type = OrderType.LMT,
-            Price = 103,
-            Quantity = 30
-        });
-
-        var incoming = new Order
-        {
-            Id = 4,
-            Side = Side.Buy,
-            Type = OrderType.MKT,
-            Price = null,
-            Quantity = 45
-        };
-
-        // Act
-        var trades = engine.ProcessOrder(incoming);
-
-        // Assert
-        Assert.Equal(3, trades.Count);
-
-        Assert.Equal(101m, trades[0].Price);
-        Assert.Equal(10, trades[0].Quantity);
-
-        Assert.Equal(102m, trades[1].Price);
-        Assert.Equal(20, trades[1].Quantity);
-
-        Assert.Equal(103m, trades[2].Price);
-        Assert.Equal(15, trades[2].Quantity);
-
-        Assert.Equal(0, incoming.Quantity);
-
-        var remainingAsk = Assert.Single(book.Asks);
-
-        Assert.Equal(103m, remainingAsk.Price);
-        Assert.Equal(15, remainingAsk.Quantity);
-
-        await engine.StopAsync();
+        private static Order CreateMarketOrder(
+            long id,
+            Side side,
+            int quantity,
+            string ownerId = "TestUser") =>
+            new()
+            {
+                Id = id,
+                OwnerID = ownerId,
+                Side = side,
+                Type = OrderType.MKT,
+                Price = null,
+                Quantity = quantity
+            };
     }
 }

@@ -1,93 +1,162 @@
 # Matching Engine
 
-A simple in-memory order matching engine developed in C# as part of the Morgan Stanley Strats Internship selection process.
+A single-asset in-memory matching engine developed in C# as part of the Morgan Stanley Strats Internship selection process.
 
-## About
+The project focuses on order matching, price-time priority, efficient order book operations and serialized processing of concurrent requests.
 
-The goal of this project is to implement a basic matching engine for a single asset.
+## Features
 
-The engine will maintain an order book and process different types of orders according to price and time priority.
-
-The challenge includes support for:
-
-- Limit orders
-- Market orders
-- Order book visualization
+- Limit Orders (LMT)
+- Market Orders (MKT)
+- Price-time priority
+- Partial fills
+- Multi-level matching
+- Trade generation
 - Order cancellation
-- Order modification
-- Pegged orders
-
-The implementation will be developed incrementally, with the matching logic kept separate from the command-line interface.
+- Best Bid / Best Ask retrieval
+- Concurrent order submission
+- FIFO message processing
+- Automated tests
 
 ## Project Structure
 
 - `MatchingEngine.Core` — order models, order book and matching logic
-- `MatchingEngine.Cli` — command-line interface used to interact with the engine
-- `MatchingEngine.Tests` — automated tests for the matching behavior
+- `MatchingEngine.Cli` — command-line interface for interacting with the engine
+- `MatchingEngine.Tests` — automated tests for matching and order book behavior
 
-## Current Status
+## Order Book
 
-- Basic order structure implemented
-- Limit order book organized by price levels using `SortedDictionary<decimal, Queue<Order>>`
-- Buy orders prioritized by highest price
-- Sell orders prioritized by lowest price
-- FIFO priority preserved within each price level
-- Thread-safe order ingress with serialized processing
-- Concurrent orders assigned an execution sequence before processing
-- Limit order matching
-- Market order matching
-- Partial fills
-- Multi-level order execution
-- Best Bid / Best Ask retrieval
-- Trade generation
-- Filled orders automatically removed from the order book
-- Unfilled Limit Orders remain in the book
-- Unfilled Market Orders are discarded
-- Automated tests covering order book priority, Limit Orders and Market Orders
+The order book is organized by price levels using:
 
-### Order Processing Flow
+```text
+SortedDictionary<decimal, LinkedList<Order>>
+```
 
-Orders can be submitted concurrently from multiple threads.
+Bids are ordered from highest to lowest price, while asks are ordered from lowest to highest.
 
-Each order receives a sequence number when it is accepted by the engine and is processed by a single consumer. The matching engine then attempts to execute the incoming order against the best available prices in the opposite side of the book.
+Orders at the same price level are stored in a `LinkedList`, preserving FIFO priority.
+
+An auxiliary index:
+
+```text
+Dictionary<long, LinkedListNode<Order>>
+```
+
+maps each order ID directly to its node, allowing cancellation without scanning the entire order book.
+
+## Matching
+
+Incoming orders are matched against the best available price on the opposite side of the book.
+
+```text
+Incoming Order
+      |
+      v
+ Best Opposite Price
+      |
+      v
+   Execute Trade
+      |
+      v
+ Remaining Quantity?
+```
+
+Limit Orders continue matching while the available price satisfies their limit. Any remaining quantity is added to the order book.
+
+Market Orders consume available liquidity until fully executed or until the opposite side of the book becomes empty. Unfilled Market Order quantity is not added to the book.
+
+Trades are executed at the resting order price.
+
+Each execution generates a `Trade` containing:
+
+- Buy Order ID
+- Sell Order ID
+- Executed price
+- Executed quantity
+
+## Concurrency
+
+The engine supports messages submitted concurrently from multiple threads.
+
+New orders and cancellation requests are placed in a thread-safe queue:
 
 ```text
 Multiple Producers
         |
         v
-   Order Ingress
+BlockingCollection<EngineMessage>
         |
         v
-     Sequence
+ ConcurrentQueue
         |
         v
-   Incoming Queue
+   Single Worker
         |
         v
- Single Consumer
+ Matching Engine
         |
         v
-  Matching Engine
-      /      \
-     v        v
- Best Bid   Best Ask
-      \      /
-       v    v
-       Trades
-         |
-         v
     Order Book
 ```
 
-Limit Orders may remain in the order book when they cannot be fully executed at their specified price or better.
+A single worker consumes and processes the messages sequentially.
 
-Market Orders consume the best available prices until fully executed or until the opposite side of the book has no remaining liquidity.
+This guarantees that matching and cancellation never modify the order book simultaneously while still allowing multiple producers to submit requests concurrently.
+
+Processing priority is determined by the order in which messages enter the FIFO queue.
+
+## Order Cancellation
+
+Resting orders can be canceled by ID.
+
+The engine validates:
+
+- Whether the order exists
+- Whether the cancellation request comes from the order owner
+
+Cancellation and matching are processed through the same worker, preserving serialized access to the order book.
+
+## CLI
+
+The current command-line interface supports:
+
+```text
+BUY LMT PRICE QUANTITY
+SELL LMT PRICE QUANTITY
+
+BUY MKT QUANTITY
+SELL MKT QUANTITY
+
+CANCEL ORDER_ID
+```
+
+The CLI also displays generated trades and the current state of the order book.
+
+A multithreaded test mode is available to submit concurrent create and cancel requests and observe how they are serialized by the engine.
+
+## Current Status
+
+Implemented:
+
+- Order book with price-time priority
+- Limit Order matching
+- Market Order matching
+- Partial fills
+- Multi-level execution
+- Trade generation
+- Efficient order lookup by ID
+- Order cancellation
+- Owner validation for cancellations
+- Concurrent message ingestion
+- Single-worker serialized processing
+- Graceful queue shutdown
+- Automated matching tests
 
 ## Next Steps
 
-- Order cancellation
 - Order modification
 - Order status tracking
-- Pegged orders
+- Pegged Orders
+- Additional cancellation and concurrency tests
 - Improve CLI visualization
-- Additional matching and concurrency tests
+- Improve validation and error handling

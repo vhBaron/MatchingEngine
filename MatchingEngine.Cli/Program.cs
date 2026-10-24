@@ -1,15 +1,22 @@
 ﻿using MatchingEngine;
 
+// OrderBook mantém o estado das ordens resting. O MatchingEngine recebe
+// o mesmo book e passa a ser o responsável por processar as mensagens.
 var book = new OrderBook();
+
 var engine = new MatchingEngine.MatchingEngine(book);
 
-// =====================
+
+// ====================
+
 // POPULA BIDS
-// =====================
+
+// ====================
 
 book.AddOrder(new Order
 {
     Id = 1,
+    OwnerID = "Mercado",
     Side = Side.Buy,
     Type = OrderType.LMT,
     Price = 99,
@@ -19,6 +26,7 @@ book.AddOrder(new Order
 book.AddOrder(new Order
 {
     Id = 2,
+    OwnerID = "Mercado",
     Side = Side.Buy,
     Type = OrderType.LMT,
     Price = 98,
@@ -28,19 +36,24 @@ book.AddOrder(new Order
 book.AddOrder(new Order
 {
     Id = 3,
+    OwnerID = "Mercado",
     Side = Side.Buy,
     Type = OrderType.LMT,
     Price = 97,
     Quantity = 30
 });
 
-// =====================
+
+// ====================
+
 // POPULA ASKS
-// =====================
+
+// ====================
 
 book.AddOrder(new Order
 {
     Id = 4,
+    OwnerID = "Mercado",
     Side = Side.Sell,
     Type = OrderType.LMT,
     Price = 101,
@@ -50,6 +63,7 @@ book.AddOrder(new Order
 book.AddOrder(new Order
 {
     Id = 5,
+    OwnerID = "Mercado",
     Side = Side.Sell,
     Type = OrderType.LMT,
     Price = 102,
@@ -59,91 +73,185 @@ book.AddOrder(new Order
 book.AddOrder(new Order
 {
     Id = 6,
+    OwnerID = "Mercado",
     Side = Side.Sell,
     Type = OrderType.LMT,
     Price = 103,
     Quantity = 30
 });
 
+// ====================
+// CONFIGURA EVENTOS E ENTRADA DA CLI
+// ====================
 
-// =====================
-// EXIBE BOOK INICIAL
-// =====================
+// A CLI apenas reage aos eventos emitidos pela worker; ela não precisa acompanhar diretamente quando cada mensagem termina de ser processada.
+engine.OrderProcessed += ExecutedOrder;
+engine.OrderCanceled += CanceledOrder;
+
+long nextID = 7;
+
+Console.Write("Login: ");
+string? login = Console.ReadLine();
 
 PrintBook(book);
 
-
-// =====================
-// TESTE DE MATCH
-// =====================
-
-long nextID=1;
-
+// Loop principal da interface de console. As operações são convertidas em EngineMessage e enfileiradas; o matching/cancelamento ocorre na worker.
 while (true)
 {
     Console.WriteLine();
-    Console.Write("Nova ordem (BUY/SELL LMT PRECO QTD | BUY/SELL MKT QTD) ou EXIT: ");
 
-    string? input = Console.ReadLine();
+    Console.Write("New Order: '1'\nCancel Order: '2'\n[TEST] Run MultiThread tests: '3'\nExit: '4'\nOperation: ");
 
-    if (string.IsNullOrWhiteSpace(input))
+    string? option = Console.ReadLine()?.Trim();
+
+    if (string.IsNullOrWhiteSpace(option))
         continue;
 
-    if (input.Equals("EXIT", StringComparison.OrdinalIgnoreCase))
+    if (option.Equals("4", StringComparison.OrdinalIgnoreCase))
         break;
 
+    switch (option)
+    {
+        case "1":
+
+            Console.WriteLine();
+
+            Console.Write("Nova ordem (BUY/SELL LMT PRECO QTD | BUY/SELL MKT QTD): ");
+
+            string? inputCreate = Console.ReadLine();
+
+            if (string.IsNullOrWhiteSpace(inputCreate))
+                continue;
+
+            try
+            {
+                NewOrder(inputCreate);
+                break;
+            }
+            catch (ArgumentException ex)
+            {
+                Console.WriteLine($"Erro: {ex.Message} Tente novamente.");
+            }
+
+            break;
+
+
+        case "2":
+
+            Console.WriteLine();
+
+            Console.Write("Cancel Order (CANCEL ID): ");
+
+            string? inputCancel = Console.ReadLine();
+
+            if (string.IsNullOrWhiteSpace(inputCancel))
+                continue;
+
+            try
+            {
+                CancelOrder(inputCancel);
+                break;
+            }
+            catch (ArgumentException ex)
+            {
+                Console.WriteLine($"Erro: {ex.Message} Tente novamente.");
+            }
+
+            break;
+        
+        case "3":
+            await MultiThreadTests();
+            break;
+    }
+}
+
+
+// Exibe a visão atual do book. A ordenação já é fornecida pelo OrderBook.
+static void PrintBook(OrderBook book)
+{
+    Console.WriteLine();
+
+    Console.WriteLine("========= ORDER BOOK =========");
+
+    Console.WriteLine();
+
+    Console.WriteLine("ASKS");
+
+    foreach (Order order in book.Asks)
+    {
+        Console.WriteLine(
+            $"ID: {order.Id,2} | " +
+            $"QTY: {order.Quantity,3} | " +
+            $"PRICE: {order.Price}"
+        );
+    }
+
+    Console.WriteLine();
+
+    Console.WriteLine("-------- SPREAD --------");
+
+    Console.WriteLine();
+
+    Console.WriteLine("BIDS");
+
+    foreach (Order order in book.Bids)
+    {
+        Console.WriteLine(
+            $"ID: {order.Id,2} | " +
+            $"QTY: {order.Quantity,3} | " +
+            $"PRICE: {order.Price}"
+        );
+    }
+}
+
+// Valida o comando digitado, constrói a Order e envia uma mensagem para o engine.
+// Nenhuma alteração no book é feita diretamente por este método.
+void NewOrder(string? input = null)
+{
     string[] parts = input.Split(
         ' ',
         StringSplitOptions.RemoveEmptyEntries
     );
 
-    // =====================
-    // SIDE
-    // =====================
-
     Side side;
 
     if (parts[0].Equals("BUY", StringComparison.OrdinalIgnoreCase))
         side = Side.Buy;
+
     else if (parts[0].Equals("SELL", StringComparison.OrdinalIgnoreCase))
         side = Side.Sell;
+
     else
     {
-        Console.WriteLine("Side inválido.");
-        continue;
+        throw new ArgumentException("Side inválido.");
     }
-
-
-    // =====================
-    // TYPE
-    // =====================
 
     if (parts.Length < 3)
     {
-        Console.WriteLine("Formato inválido.");
-        continue;
+        throw new ArgumentException("Side inválido.");
     }
 
     OrderType type;
 
     if (parts[1].Equals("LMT", StringComparison.OrdinalIgnoreCase))
         type = OrderType.LMT;
+
     else if (parts[1].Equals("MKT", StringComparison.OrdinalIgnoreCase))
         type = OrderType.MKT;
+
     else
     {
-        Console.WriteLine("Tipo inválido.");
-        continue;
+        throw new ArgumentException("Tipo inválido.");
     }
 
-
     decimal? price = null;
+
     int quantity;
 
 
-    // =====================
-    // LIMIT ORDER
-    // =====================
+    // ====================
+    // LMT exige preço e quantidade.
+    // ====================
 
     if (type == OrderType.LMT)
     {
@@ -152,27 +260,30 @@ while (true)
             Console.WriteLine(
                 "Formato LMT: BUY/SELL LMT PRECO QUANTIDADE"
             );
-            continue;
+
+            throw new ArgumentException("Formato inválido.");
         }
 
         if (!decimal.TryParse(parts[2], out decimal limitPrice))
         {
             Console.WriteLine("Preço inválido.");
-            continue;
+
+            throw new ArgumentException("Preço inválido.");
         }
 
         if (!int.TryParse(parts[3], out quantity))
         {
             Console.WriteLine("Quantidade inválida.");
-            continue;
+
+            throw new ArgumentException("Quantidade inválida.");
         }
 
         price = limitPrice;
-    }
+            }
 
-    // =====================
-    // MARKET ORDER
-    // =====================
+    // ====================
+    //  MKT não possui preço limite; recebe apenas a quantidade.
+    // ====================
 
     else
     {
@@ -181,30 +292,32 @@ while (true)
             Console.WriteLine(
                 "Formato MKT: BUY/SELL MKT QUANTIDADE"
             );
-            continue;
+
+            throw new ArgumentException("Formato inválido.");
         }
 
         if (!int.TryParse(parts[2], out quantity))
         {
             Console.WriteLine("Quantidade inválida.");
-            continue;
+
+            throw new ArgumentException("Quantidade inválida.");
         }
     }
 
 
-    // =====================
-    // CRIA ORDEM
-    // =====================
+    // ====================
+    // Depois da validação, cria a ordem que será enviada ao engine.
+    // ====================
 
     var incomingOrder = new Order
     {
         Id = nextID++,
+        OwnerID = login,
         Side = side,
         Type = type,
         Price = price,
         Quantity = quantity
     };
-
 
     Console.WriteLine();
 
@@ -222,16 +335,20 @@ while (true)
     }
 
 
-    // =====================
-    // MATCH
-    // =====================
+    // A CLI encerra sua responsabilidade aqui: a mensagem entra na fila e será processada de forma sequencial pela worker do MatchingEngine.
 
-    var trades = engine.ProcessOrder(incomingOrder);
+    var msg = new EngineMessage {Type = MessageType.NewOrder, Order = incomingOrder};
 
+    engine.SubmitOrder(msg);
+    
+}
 
-    // =====================
-    // TRADES
-    // =====================
+// Handler chamado pelo evento OrderProcessed depois que o engine termina o matching de uma nova ordem.
+void ExecutedOrder(Order order, List<Trade> trades)
+{
+    // ====================
+    // Exibe todas as execuções geradas pela ordem recebida.
+    // ====================
 
     Console.WriteLine();
     Console.WriteLine("========= TRADES =========");
@@ -251,74 +368,147 @@ while (true)
         );
     }
 
-
-    // =====================
-    // RESULTADO DA ORDEM
-    // =====================
+    // ====================
+    // Informa o resultado da ordem
+    // ====================
 
     Console.WriteLine();
 
-    if (incomingOrder.Quantity == 0)
+    if (order.Quantity == 0)
     {
         Console.WriteLine("Ordem totalmente executada.");
     }
-    else if (type == OrderType.MKT)
+    else if (order.Type == OrderType.MKT)
     {
         Console.WriteLine(
             $"MKT parcialmente executada. " +
-            $"Quantidade não preenchida: {incomingOrder.Quantity}"
+            $"Quantidade não preenchida: {order.Quantity}"
         );
     }
     else
     {
         Console.WriteLine(
-            $"Saldo da LMT no book: {incomingOrder.Quantity}"
+            $"Saldo da LMT no book: {order.Quantity}"
         );
     }
-
-
-    // =====================
-    // BOOK
-    // =====================
 
     PrintBook(book);
 }
 
-     
+// Valida o comando de cancelamento e o transforma em uma mensagem.
+// A validação de existência e propriedade da ordem acontece dentro do OrderBook.
+void CancelOrder(string? input = null)
+{
+    string[] parts = input!.Split(
+        ' ',
+        StringSplitOptions.RemoveEmptyEntries
+    );
+
+    if (!parts[0].Equals("CANCEL", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new ArgumentException("Formato: CANCEL ID");
+    }
+
+    if (!long.TryParse(parts[1], out long orderId))
+    {
+        throw new ArgumentException("ID inválido.");
+    }
+
+    // O cancelamento também passa pela mesma fila das novas ordens. Assim, cancel e matching nunca alteram o book simultaneamente.
+    var msg = new EngineMessage {Type = MessageType.CancelOrder, OrderId = orderId, login = login };
+    engine.SubmitOrder(msg);
 
     
-// =====================
-// PRINT DO BOOK
-// =====================
-static void PrintBook(OrderBook book)
+}
+
+// Handler acionado quando a tentativa de cancelamento termina; atualiza a visualização com o estado real do book.
+void CanceledOrder()
 {
-    Console.WriteLine();
-    Console.WriteLine("========= ORDER BOOK =========");
+    PrintBook(book);
+}
 
-    Console.WriteLine();
-    Console.WriteLine("ASKS");
 
-    foreach (Order order in book.Asks)
+async Task MultiThreadTests()
+{
+    var testBook = new OrderBook();
+    var testEngine = new MatchingEngine.MatchingEngine(testBook);
+
+    const int numberOfOrders = 3;
+
+    // 2 tasks por ID (Create + Cancel) + thread principal
+    using var barrier = new Barrier(numberOfOrders * 2 + 1);
+
+    var tasks = new List<Task>();
+
+    for (int i = 1; i <= numberOfOrders; i++)
     {
-        Console.WriteLine(
-            $"ID: {order.Id,2} | " +
-            $"QTY: {order.Quantity,3} | " +
-            $"PRICE: {order.Price}"
-        );
+        long id = i;
+
+        // CREATE
+        tasks.Add(Task.Run(() =>
+        {
+            var order = new Order
+            {
+                Id = id,
+                OwnerID = login!,
+                Side = Side.Buy,
+                Type = OrderType.LMT,
+                Price = 100m,
+                Quantity = 10
+            };
+
+            Console.WriteLine(
+                $"CREATE {id} pronta | Thread {Environment.CurrentManagedThreadId}"
+            );
+
+            barrier.SignalAndWait();
+
+            var msg = new EngineMessage
+            {
+                Type = MessageType.NewOrder,
+                Order = order
+            };
+
+            testEngine.SubmitOrder(msg);
+        }));
+
+
+        // CANCEL
+        tasks.Add(Task.Run(() =>
+        {
+            Console.WriteLine(
+                $"CANCEL {id} pronto | Thread {Environment.CurrentManagedThreadId}"
+            );
+
+            barrier.SignalAndWait();
+
+            var msg = new EngineMessage
+            {
+                Type = MessageType.CancelOrder,
+                OrderId = id,
+                login = login
+            };
+
+            testEngine.SubmitOrder(msg);
+        }));
     }
 
     Console.WriteLine();
-    Console.WriteLine("--------- SPREAD ---------");
+    Console.WriteLine("Esperando todas as threads ficarem prontas...");
+
+    barrier.SignalAndWait();
+
+    Console.WriteLine("GO!");
     Console.WriteLine();
 
-    Console.WriteLine("BIDS");
+    await Task.WhenAll(tasks);
 
-    foreach (Order order in book.Bids)
-    {
-        Console.WriteLine(
-            $"ID: {order.Id,2} | " +
-            $"QTY: {order.Quantity,3} | " +
-            $"PRICE: {order.Price}"
-        );
-    }
+    // Todas as mensagens já foram enviadas.
+    // Agora espera o engine terminar de consumir a fila.
+    await testEngine.StopAsync();
+
+    Console.WriteLine();
+    Console.WriteLine("========= RESULTADO =========");
+
+    PrintBook(testBook);
 }
