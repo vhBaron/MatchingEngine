@@ -13,8 +13,10 @@ The project focuses on order matching, price-time priority, efficient order book
 - Multi-level matching
 - Trade generation
 - Order cancellation
+- Order modification
+- Owner validation for cancel and modify requests
 - Best Bid / Best Ask retrieval
-- Concurrent order submission
+- Concurrent message submission
 - FIFO message processing
 - Automated tests
 
@@ -42,7 +44,7 @@ An auxiliary index:
 Dictionary<long, LinkedListNode<Order>>
 ```
 
-maps each order ID directly to its node, allowing cancellation without scanning the entire order book.
+maps each order ID directly to its node, allowing cancellation and modification without scanning the entire order book.
 
 ## Matching
 
@@ -52,13 +54,13 @@ Incoming orders are matched against the best available price on the opposite sid
 Incoming Order
       |
       v
- Best Opposite Price
+Best Opposite Price
       |
       v
-   Execute Trade
+Execute Trade
       |
       v
- Remaining Quantity?
+Remaining Quantity?
 ```
 
 Limit Orders continue matching while the available price satisfies their limit. Any remaining quantity is added to the order book.
@@ -73,12 +75,13 @@ Each execution generates a `Trade` containing:
 - Sell Order ID
 - Executed price
 - Executed quantity
+- Execution timestamp
 
 ## Concurrency
 
 The engine supports messages submitted concurrently from multiple threads.
 
-New orders and cancellation requests are placed in a thread-safe queue:
+New orders, cancellations and modifications are placed in a thread-safe queue:
 
 ```text
 Multiple Producers
@@ -87,21 +90,21 @@ Multiple Producers
 BlockingCollection<EngineMessage>
         |
         v
- ConcurrentQueue
+ConcurrentQueue
         |
         v
-   Single Worker
+Single Worker
         |
         v
- Matching Engine
+Matching Engine
         |
         v
-    Order Book
+Order Book
 ```
 
 A single worker consumes and processes the messages sequentially.
 
-This guarantees that matching and cancellation never modify the order book simultaneously while still allowing multiple producers to submit requests concurrently.
+This guarantees that matching, cancellation and modification never mutate the order book simultaneously while still allowing multiple producers to submit requests concurrently.
 
 Processing priority is determined by the order in which messages enter the FIFO queue.
 
@@ -114,25 +117,78 @@ The engine validates:
 - Whether the order exists
 - Whether the cancellation request comes from the order owner
 
-Cancellation and matching are processed through the same worker, preserving serialized access to the order book.
+Cancellation is processed through the same worker used for matching, preserving serialized access to the order book.
+
+## Order Modification
+
+Resting orders can be modified by ID.
+
+The user may change:
+
+- Quantity only
+- Price only
+- Quantity and price together
+
+The engine validates that the order exists and that the modification request comes from the order owner.
+
+A modification is processed as a cancel-and-replace operation:
+
+```text
+Locate Order by ID
+      |
+      v
+Remove from Book
+      |
+      v
+Apply New Values
+      |
+      v
+Run Matching Again
+      |
+      v
+Rest Remaining Quantity
+```
+
+Because the modified order goes through the matching engine again, a new price may immediately cross the spread and generate one or more trades.
+
+If quantity remains after matching, the Limit Order is inserted back into the appropriate price level.
+
+The current implementation treats every modification as a new resting position, so the previous time priority is not preserved.
 
 ## CLI
 
 The current command-line interface supports:
 
 ```text
-BUY LMT PRICE QUANTITY
-SELL LMT PRICE QUANTITY
+BUY LMT QUANTITY @PRICE
+SELL LMT QUANTITY @PRICE
 
 BUY MKT QUANTITY
 SELL MKT QUANTITY
 
 CANCEL ORDER_ID
+
+MODIFY ORDER_ID QUANTITY @PRICE
+MODIFY ORDER_ID QUANTITY
+MODIFY ORDER_ID @PRICE
 ```
 
-The CLI also displays generated trades and the current state of the order book.
+Examples:
 
-A multithreaded test mode is available to submit concurrent create and cancel requests and observe how they are serialized by the engine.
+```text
+BUY LMT 20 @99
+SELL MKT 10
+
+CANCEL 7
+
+MODIFY 7 20 @101
+MODIFY 7 20
+MODIFY 7 @101
+```
+
+The CLI displays generated trades and the current state of the order book after processing operations.
+
+A multithreaded test mode is also available to submit concurrent messages and observe how they are serialized by the engine.
 
 ## Current Status
 
@@ -146,7 +202,9 @@ Implemented:
 - Trade generation
 - Efficient order lookup by ID
 - Order cancellation
-- Owner validation for cancellations
+- Order modification
+- Re-matching after modification
+- Owner validation for cancellation and modification
 - Concurrent message ingestion
 - Single-worker serialized processing
 - Graceful queue shutdown
@@ -154,9 +212,9 @@ Implemented:
 
 ## Next Steps
 
-- Order modification
 - Order status tracking
+- Refine modification priority rules
 - Pegged Orders
-- Additional cancellation and concurrency tests
+- Additional modification and concurrency tests
 - Improve CLI visualization
 - Improve validation and error handling

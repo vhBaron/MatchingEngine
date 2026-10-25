@@ -86,7 +86,7 @@ book.AddOrder(new Order
 
 // A CLI apenas reage aos eventos emitidos pela worker; ela não precisa acompanhar diretamente quando cada mensagem termina de ser processada.
 engine.OrderProcessed += ExecutedOrder;
-engine.OrderCanceled += CanceledOrder;
+engine.PrintBook += CanceledModifiedOrder;
 
 long nextID = 7;
 
@@ -100,14 +100,14 @@ while (true)
 {
     Console.WriteLine();
 
-    Console.Write("New Order: '1'\nCancel Order: '2'\n[TEST] Run MultiThread tests: '3'\nExit: '4'\nOperation: ");
+    Console.Write("New Order: '1'\nCancel Order: '2'\nModify Order: '3'\n[TEST] Run MultiThread tests: '4'\nExit: '5'\nOperation: ");
 
     string? option = Console.ReadLine()?.Trim();
 
     if (string.IsNullOrWhiteSpace(option))
         continue;
 
-    if (option.Equals("4", StringComparison.OrdinalIgnoreCase))
+    if (option.Equals("5", StringComparison.OrdinalIgnoreCase))
         break;
 
     switch (option)
@@ -116,7 +116,7 @@ while (true)
 
             Console.WriteLine();
 
-            Console.Write("Nova ordem (BUY/SELL LMT PRECO QTD | BUY/SELL MKT QTD): ");
+            Console.Write("Nova ordem (BUY/SELL LMT QTD @ PRECO  | BUY/SELL MKT QTD): ");
 
             string? inputCreate = Console.ReadLine();
 
@@ -160,6 +160,24 @@ while (true)
             break;
         
         case "3":
+            Console.Write("Modify Order (MODIFY ID QTD @ PRICE): ");
+
+            string? inputModify = Console.ReadLine();
+
+            if (string.IsNullOrWhiteSpace(inputModify))
+                continue;
+
+            try
+            {
+                ModifyOrder(inputModify);
+                break;
+            }
+            catch (ArgumentException ex)
+            {
+                Console.WriteLine($"Erro: {ex.Message} Tente novamente.");
+            }
+            break;
+        case "4":
             await MultiThreadTests();
             break;
     }
@@ -207,7 +225,7 @@ static void PrintBook(OrderBook book)
 // Valida o comando digitado, constrói a Order e envia uma mensagem para o engine.
 // Nenhuma alteração no book é feita diretamente por este método.
 void NewOrder(string? input = null)
-{
+{   input = input.Replace("@", " ");
     string[] parts = input.Split(
         ' ',
         StringSplitOptions.RemoveEmptyEntries
@@ -264,14 +282,14 @@ void NewOrder(string? input = null)
             throw new ArgumentException("Formato inválido.");
         }
 
-        if (!decimal.TryParse(parts[2], out decimal limitPrice))
+        if (!decimal.TryParse(parts[3], out decimal limitPrice))
         {
             Console.WriteLine("Preço inválido.");
 
             throw new ArgumentException("Preço inválido.");
         }
 
-        if (!int.TryParse(parts[3], out quantity))
+        if (!int.TryParse(parts[2], out quantity))
         {
             Console.WriteLine("Quantidade inválida.");
 
@@ -391,8 +409,6 @@ void ExecutedOrder(Order order, List<Trade> trades)
             $"Saldo da LMT no book: {order.Quantity}"
         );
     }
-
-    PrintBook(book);
 }
 
 // Valida o comando de cancelamento e o transforma em uma mensagem.
@@ -422,9 +438,77 @@ void CancelOrder(string? input = null)
 }
 
 // Handler acionado quando a tentativa de cancelamento termina; atualiza a visualização com o estado real do book.
-void CanceledOrder()
+void CanceledModifiedOrder()
 {
     PrintBook(book);
+}
+
+// Valida o comando de modificação e o transforma em uma mensagem.
+// A validação de existência e propriedade da ordem acontece dentro do OrderBook.
+void ModifyOrder(string? input = null)
+{
+    decimal? price = null;
+    int? quantity = null;
+
+    if (string.IsNullOrWhiteSpace(input))
+        throw new ArgumentException("Comando vazio.");
+
+    string[] parts = input.Split(
+        ' ',
+        StringSplitOptions.RemoveEmptyEntries
+    );
+
+    if (parts.Length < 3 || parts.Length > 4)
+        throw new ArgumentException(
+            "Formato: MODIFY ID [QTD] [@PRICE]"
+        );
+
+    if (!parts[0].Equals(
+        "MODIFY",
+        StringComparison.OrdinalIgnoreCase))
+    {
+        throw new ArgumentException(
+            "Formato: MODIFY ID [QTD] [@PRICE]"
+        );
+    }
+
+    if (!long.TryParse(parts[1], out long orderId))
+        throw new ArgumentException("ID inválido.");
+
+
+    for (int i = 2; i < parts.Length; i++)
+    {
+        string value = parts[i];
+
+        if (value.StartsWith("@"))
+        {
+            if (price.HasValue)
+                throw new ArgumentException("Preço informado mais de uma vez.");
+
+            string priceText = value.Substring(1);
+
+            if (!decimal.TryParse(priceText, out decimal parsedPrice))
+                throw new ArgumentException("Preço inválido.");
+
+            price = parsedPrice;
+        }
+        else
+        {
+            if (quantity.HasValue)
+                throw new ArgumentException(
+                    "Formato inválido. Use @ antes do preço."
+                );
+
+            if (!int.TryParse(value, out int parsedQuantity))
+                throw new ArgumentException("Quantidade inválida.");
+
+            quantity = parsedQuantity;
+        }
+    }
+
+    var msgModify = new EngineMessage {Type = MessageType.ModifyOrder, OrderId = orderId, login = login, Price = price, Quantity = quantity};
+
+    engine.SubmitOrder(msgModify);
 }
 
 
@@ -477,17 +561,12 @@ async Task MultiThreadTests()
         tasks.Add(Task.Run(() =>
         {
             Console.WriteLine(
-                $"CANCEL {id} pronto | Thread {Environment.CurrentManagedThreadId}"
+                $"MODIFY {id} pronto | Thread {Environment.CurrentManagedThreadId}"
             );
 
             barrier.SignalAndWait();
 
-            var msg = new EngineMessage
-            {
-                Type = MessageType.CancelOrder,
-                OrderId = id,
-                login = login
-            };
+            var msg = new EngineMessage {Type = MessageType.ModifyOrder, OrderId = id, login = login, Price = 200 , Quantity = 20};
 
             testEngine.SubmitOrder(msg);
         }));

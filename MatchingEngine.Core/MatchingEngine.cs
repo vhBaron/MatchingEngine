@@ -20,7 +20,7 @@ namespace MatchingEngine
 
         // Eventos usados pela camada externa (CLI/UI) para reagir ao resultado
         public event Action<Order, List<Trade>>? OrderProcessed;
-        public event Action? OrderCanceled;
+        public event Action? PrintBook;
 
         // Impede novas mensagens e aguarda a worker terminar tudo que já está na fila.
         public async Task StopAsync()
@@ -58,6 +58,10 @@ namespace MatchingEngine
                     case MessageType.CancelOrder:
                         msgCancelOrder(msg.OrderId!.Value, msg.login!);
                         break;
+
+                    case MessageType.ModifyOrder:
+                        msgModifyOrder(msg.OrderId!.Value, msg.login!, msg.Price, msg.Quantity);
+                        break;
                 }
                
             }
@@ -70,6 +74,7 @@ namespace MatchingEngine
             {
                 var trades = ProcessOrder(order);
                 OrderProcessed?.Invoke(order,trades);
+                PrintBook?.Invoke();
             }
             catch (ArgumentException ex)
             {
@@ -82,7 +87,7 @@ namespace MatchingEngine
         {
             try
             {
-                var result = CancelOrder(orderId, login);
+                var result = _orderBook.CancelOrder(orderId, login);
                 Console.WriteLine(result);
             }
             catch (ArgumentException ex)
@@ -91,9 +96,29 @@ namespace MatchingEngine
             }
             finally // Mesmo se o cancelamento falha imprime o book
             {
-                OrderCanceled?.Invoke();
+                PrintBook?.Invoke();
             }
         }
+
+        // Executa a modificação na mesma worker usada pelo matching.
+        private void msgModifyOrder(long orderId, string login, decimal? newPrice, int? newQuantity)
+        {
+            try
+            {
+                Order modifiedOrder = _orderBook.ModifyOrder(orderId, login, newPrice, newQuantity);
+
+                List<Trade> trades = ProcessOrder(modifiedOrder);
+
+                Console.WriteLine(modifiedOrder);
+                OrderProcessed?.Invoke(modifiedOrder, trades);
+                PrintBook?.Invoke();
+            }
+            catch (ArgumentException ex)
+            {
+                Console.WriteLine($"Erro ao modificar ordem: {ex.Message}");
+            }
+        }
+
 
         // Direciona a ordem para o algoritmo correspondente ao lado da operação e retorna todos os trades gerados durante o matching.
         public List<Trade> ProcessOrder(Order incomingOrder)
@@ -217,11 +242,5 @@ namespace MatchingEngine
             }
         }
 
-        // Delega ao OrderBook a validação de existência/propriedade e a remoção.
-        public string CancelOrder(long id, string login)
-        {
-            var cancel = _orderBook.CancelOrder(id, login);
-            return cancel;
-        }
     }
 }

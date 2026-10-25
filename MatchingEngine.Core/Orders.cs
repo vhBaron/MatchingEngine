@@ -21,7 +21,7 @@ namespace MatchingEngine
         public OrderType Type { get; init; }
 
         // É nullable porque ordens MKT não possuem preço limite.
-        public decimal? Price { get; init; }
+        public decimal? Price { get; set; }
 
         public int Quantity { get; set; }
     }
@@ -36,6 +36,10 @@ namespace MatchingEngine
         public Order? Order { get; init; }
 
         public long? OrderId { get; init; }
+
+        public decimal? Price { get; init; }
+
+        public int? Quantity { get; set; }
     }
 
     // Mantém as resting orders organizadas por preço e, dentro de cada preço, por ordem de chegada (LinkedList).
@@ -111,7 +115,6 @@ namespace MatchingEngine
                 : _asks.First().Value.First!.Value;
 
 
-
         // Remoção usada pelo matching. Uma execução só pode consumir a ordem
         // que está na frente do nível de preço, preservando prioridade temporal.
         public void RemoveOrder(Order order)
@@ -129,9 +132,6 @@ namespace MatchingEngine
             RemoveNode(node);
         }
 
-
-        
-        // Cancelamento solicitado pelo usuário. O índice por ID permite localizar qualquer resting order diretamente, independentemente da posição no nível.
         public string CancelOrder(long orderId, string ownerId)
         {
             if (!_ordersById.TryGetValue(orderId, out var node))
@@ -142,10 +142,38 @@ namespace MatchingEngine
                 throw new ArgumentException("Owner Diferente");
 
 
+            
             RemoveNode(node);
-
             return "Ordem cancelada com sucesso";
+            
         }
+        
+        // Cancelamento e Modificação solicitado pelo usuário. O índice por ID permite localizar qualquer resting order diretamente, independentemente da posição no nível.
+       public Order ModifyOrder(long orderId,string ownerId,decimal? newPrice = null,int? newQuantity = null)
+    {
+        if (!_ordersById.TryGetValue(orderId, out var node))
+            throw new ArgumentException("ID não encontrado");
+
+        if (node.Value.OwnerID != ownerId)
+            throw new ArgumentException("Owner diferente");
+
+        if (newPrice == null && newQuantity == null)
+            throw new ArgumentException(
+                "É necessário fornecer preço ou quantidade.");
+
+        Order order = node.Value;
+
+        // Primeiro tira a ordem antiga do book
+        RemoveNode(node);
+
+        if (newPrice.HasValue)
+            order.Price = newPrice.Value;
+
+        if (newQuantity.HasValue)
+            order.Quantity = newQuantity.Value;
+
+        return order;
+    }
 
         // Centraliza a remoção para manter LinkedList, índice por ID e níveis de preço sempre consistentes entre si.
         private void RemoveNode(LinkedListNode<Order> node)
